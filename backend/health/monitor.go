@@ -2,64 +2,81 @@ package health
 
 import (
 	"context"
-	"fmt"
 	"log"
-	"time"
+	"net/http"
 
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes"
 )
 
-type ClusterHealth struct {
-	NodeCount     int
-	ReadyNodes    int
-	NotReadyNodes int
-	TotalPods     int
-	RunningPods   int
-	FailedPods    int
-	PendingPods   int
+var (
+	NodeReadyGauge = prometheus.NewGauge(prometheus.GaugeOpts{
+		Name: "k8s_nodes_ready_total",
+		Help: "Number of ready Kubernetes nodes",
+	})
+	PodRunningGauge = prometheus.NewGauge(prometheus.GaugeOpts{
+		Name: "k8s_pods_running_total",
+		Help: "Number of running Kubernetes pods",
+	})
+	PodFailedGauge = prometheus.NewGauge(prometheus.GaugeOpts{
+		Name: "k8s_pods_failed_total",
+		Help: "Number of failed Kubernetes pods",
+	})
+)
+
+func StartMetricsServer(port string) {
+	prometheus.MustRegister(NodeReadyGauge, PodRunningGauge, PodFailedGauge)
+	http.Handle("/metrics", promhttp.Handler())
+	go func() {
+		log.Printf("Starting metrics server on :%s/metrics ...", port)
+		if err := http.ListenAndServe(":"+port, nil); err != nil {
+			log.Fatalf("Metrics server failed: %v", err)
+		}
+	}()
 }
 
-func CheckClusterHealth(clientset *kubernetes.Clientset) (*ClusterHealth, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
+type ClusterStats struct {
+	NodeCount    int
+	ReadyNodes   int
+	TotalPods    int
+	RunningPods  int
+	FailedPods   int
+}
 
-	health := &ClusterHealth{}
-
-	// --- Check nodes ---
-	nodes, err := clientset.CoreV1().Nodes().List(ctx, metav1.ListOptions{})
+func CheckClusterHealth(clientset *kubernetes.Clientset) (*ClusterStats, error) {
+	nodes, err := clientset.CoreV1().Nodes().List(context.TODO(), metav1.ListOptions{})
 	if err != nil {
-		return nil, fmt.Errorf("failed to list nodes: %v", err)
+		return nil, err
 	}
-	health.NodeCount = len(nodes.Items)
+
+	pods, err := clientset.CoreV1().Pods("").List(context.TODO(), metav1.ListOptions{})
+	if err != nil {
+		return nil, err
+	}
+
+	stats := &ClusterStats{
+		NodeCount: len(nodes.Items),
+		TotalPods: len(pods.Items),
+	}
+
 	for _, node := range nodes.Items {
 		for _, cond := range node.Status.Conditions {
 			if cond.Type == "Ready" && cond.Status == "True" {
-				health.ReadyNodes++
+				stats.ReadyNodes++
 			}
 		}
 	}
-	health.NotReadyNodes = health.NodeCount - health.ReadyNodes
 
-	// --- Check pods ---
-	pods, err := clientset.CoreV1().Pods("").List(ctx, metav1.ListOptions{})
-	if err != nil {
-		return nil, fmt.Errorf("failed to list pods: %v", err)
-	}
-	health.TotalPods = len(pods.Items)
 	for _, pod := range pods.Items {
 		switch pod.Status.Phase {
 		case "Running":
-			health.RunningPods++
+			stats.RunningPods++
 		case "Failed":
-			health.FailedPods++
-		case "Pending":
-			health.PendingPods++
+			stats.FailedPods++
 		}
 	}
 
-	log.Printf("[HealthCheck] Nodes: %d ready/%d total | Pods: %d running/%d failed\n",
-		health.ReadyNodes, health.NodeCount, health.RunningPods, health.TotalPods)
-
-	return health, nil
+	return stats, nil
 }

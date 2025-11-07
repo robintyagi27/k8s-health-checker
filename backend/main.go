@@ -9,7 +9,7 @@ import (
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/tools/clientcmd"
 
-	"github.com/robintyagi27/HV-porject-capstone/k8s-health-checker/backend/health"
+	"github.com/robintyagi27/k8s-health-checker/health"
 )
 
 func main() {
@@ -37,7 +37,7 @@ func main() {
 	for {
 		stats, err := health.CheckClusterHealth(clientset)
 		if err != nil {
-			log.Printf("Health check error: %v", err)
+			log.Printf("⚠️ Health check error: %v", err)
 			time.Sleep(15 * time.Second)
 			continue
 		}
