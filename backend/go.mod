@@ -1,4 +1,4 @@
-module github.com/robintyagi27/HV-project-capstone/k8s-health-checker
+module github.com/robintyagi27/k8s-health-checker
 
 go 1.25.3
 
